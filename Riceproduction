@@ -1,0 +1,88 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.linear_model import LassoCV
+from sklearn.metrics import mean_squared_error
+
+# Load the dataset
+rice_production_data = pd.read_csv('rice_production_data.csv')
+
+# Dropping unnecessary rows and columns
+rice_production_data = rice_production_data.iloc[1:35, 1:-1]
+
+# Convert data to numeric
+rice_production_data = rice_production_data.apply(pd.to_numeric, errors='coerce')
+
+# Feature selection
+# (You can add your feature selection code here if necessary)
+
+# Splitting data for prediction
+X = rice_production_data.drop('State/UT', axis=1)
+y = rice_production_data.iloc[:, -1]
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Advanced models
+models = {
+    'RandomForest': RandomForestRegressor(random_state=42),
+    'GradientBoosting': GradientBoostingRegressor(random_state=42),
+    'LassoCV': LassoCV(cv=5)
+}
+
+# Hyperparameter tuning with GridSearchCV
+best_params = {}
+for name, model in models.items():
+    if name == 'LassoCV':
+        model.fit(X_train, y_train)
+    else:
+        param_grid = {}
+        if name == 'RandomForest':
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [None, 10, 20, 30],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4]
+            }
+        elif name == 'GradientBoosting':
+            param_grid = {
+                'n_estimators': [100, 200, 300],
+                'learning_rate': [0.01, 0.1, 0.2],
+                'max_depth': [3, 4, 5],
+                'min_samples_split': [2, 5, 10],
+                'min_samples_leaf': [1, 2, 4]
+            }
+        grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=5, scoring='neg_mean_squared_error', n_jobs=-1)
+        grid_search.fit(X_train, y_train)
+        best_params[name] = grid_search.best_params_
+    print("Best parameters for", name, ":", best_params.get(name))
+
+# Model stacking
+def model_stacking(models, X_train, y_train, X_test):
+    meta_X = np.zeros((X_test.shape[0], len(models)))
+    for i, (name, model) in enumerate(models.items()):
+        if name == 'LassoCV':
+            model.fit(X_train, y_train)
+            meta_X[:, i] = model.predict(X_test)
+        else:
+            model.set_params(**best_params[name])
+            model.fit(X_train, y_train)
+            meta_X[:, i] = model.predict(X_test)
+    return meta_X
+
+meta_X_test = model_stacking(models, X_train, y_train, X_test)
+
+# Meta-model training
+meta_model = LassoCV(cv=5)
+meta_model.fit(meta_X_test, y_test)
+
+# Model evaluation
+meta_X_train = model_stacking(models, X_train, y_train, X_train)
+y_pred = meta_model.predict(meta_X_train)
+mse = mean_squared_error(y_train, y_pred)
+
+# Print MSE and best parameters
+print("Mean Squared Error:", mse)
